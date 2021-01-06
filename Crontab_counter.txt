@@ -1,0 +1,37 @@
+#!/bin/bash
+
+OS_cut=$(awk -F'=' '/Linux/ { print $2; }' /etc/os-release)
+OS=$(echo $OS_cut |awk -F'"' 'NR==1 {print $2}')
+host=$(hostname)
+TMP=$(mktemp)
+
+Croncount=$(crontab -l 2>&1 | wc -l) > /dev/null
+
+crontab -l 2>&1 | tee $TMP > /dev/null
+OUTPUT=$(cat $TMP)
+if [[ "${OUTPUT}" == *"no crontab"* ]] || [[ "${OUTPUT}" == *"Permission"* ]] ; then
+   cat << EOF
+   { "OS_Version": "$OS",
+     "Hostname": "$host",
+     "Root_Cron_Jobs": "You do not have sufficent permissions or the directory does not exist"
+    }
+EOF
+
+
+else
+
+while [ $Croncount -gt 0 ]
+do
+                Getline+=$(crontab -l | awk -v i=$Croncount 'NR==i{print NR,$0", "}')
+                Croncount=$(( $Croncount - 1 ))
+                #echo "$Getline"
+done
+
+
+cat << EOF
+{ "OS_Version": "$OS",
+  "Hostname": "$host",
+  "Root_Cron_Jobs": "$Getline"
+}
+EOF
+fi
