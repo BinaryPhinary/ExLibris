@@ -1,0 +1,44 @@
+#!/bin/bash
+
+OS_cut=$(awk -F'=' '/Linux/ { print $2; }' /etc/os-release)
+OS=$(echo $OS_cut |awk -F'"' 'NR==1 {print $2}')
+host=$(hostname)
+TMP=$(mktemp)
+Cron_user_count=$(ls /var/spool/cron 2>&1 | wc -l) > /dev/null
+
+ls /var/spool/cron 2>&1 | tee $TMP >/dev/null
+OUTPUT=$(cat $TMP)
+
+if [[ "${OUTPUT}" == *"no crontab"* ]] || [[ "${OUTPUT}" == *"Permission"* ]] ; then
+   cat << EOF
+   { "OS_Version": "$OS",
+     "Hostname": "$host",
+     "Cron_Jobs": "You do not have sufficent permissions or the directory does not exist"
+    }
+EOF
+
+
+else
+
+while [ $Cron_user_count -gt 0 ];
+do
+        Cron_account=$(ls /var/spool/cron 2>&1 | awk -v i=$Cron_user_count 'NR==i{print $1}') > /dev/null
+        Cron_job_count=$(cat /var/spool/cron/$Cron_account | wc -l )
+
+        while [ $Cron_job_count -gt 0 ]; do
+                Getline+=$(cat /var/spool/cron/$Cron_account 2>&1 | awk -v i=$Cron_user_count 'NR==i{print NR,$0", "}') > /dev/null
+                Cron_job_count=$(( $Cron_job_count - 1 ))
+        done
+        Cron_user_count=$(( $Cron_user_count -1 ))
+
+done
+
+
+
+cat << EOF
+{ "OS_Version": "$OS",
+  "Hostname": "$host",
+  "Cron_Jobs": "$Getline"
+}
+EOF
+fi
