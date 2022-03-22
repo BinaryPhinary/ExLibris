@@ -1,0 +1,181 @@
+#!/bin/bash
+
+echo -e "Welcome to the innovative mount script\n" 
+echo -e "Would you like to clean up a iii host by removing Filemounts that should not be on the host? (cleanup)\n"
+echo -e "Or would you like to setup iii hosts? (setup)"
+
+read response
+
+if [[ ! -z "$response" ]] && [[ "$response" == *"cleanup"* ]]; then             #//Oh, you want us to clean!? ITS ON! We are GOING TO CLEAN!!!
+        echo -e "Proceeding with Host cleanup"
+        echo -e "Please enter the file location which contains the iii hosts followed by the Datacenter in lower case"
+        echo -e "For example:  /root/scripts/infile dc01 "
+
+        read file_loc
+        file_array=($file_loc)
+        if [[ ! -s "${file_array}" ]] || [[ "${file_array[1]}" != *"dc"* ]] || [[ ! -f "${file_array[0]}" ]]; then
+                echo "The location you have entered is invalid.  Please try again"
+                echo ${file_array[0]}
+                echo ${file_array[1]}
+                exit 1
+        else
+                IFS=$'\n' read -d '' -r -a read_array < ${file_array[0]}      #//Turn the file into an array so we can loop through it
+                dc=${file_array[1]}
+
+                for i in "${read_array[@]}"; do                                         #//Purpose of loop is to loop through the hosts in the file
+                        echo "starting on " $i "- beginning prelinmary checks"
+                        echo $i
+                        ssh -t $i -o StrictHostKeyChecking=no <<EOF
+                        check=0
+                        echo "Making backup of /etc/fstab (as /etc/bak_fstab)"
+                        cp /etc/fstab /etc/bak_fstab
+                        cp /etc/fstab /tmp/tmpfstab                                     #//Making a copy of fstab so as to not interrupt the file
+                        IFS=$'\n' read -d '' -r -a array_fstab < /tmp/tmpfstab          #//Turn the file into an array so we can loop through it
+
+                        for z in "\${array_fstab[@]}"; do                               #//The purpose of this loop is to get the mounts on the host
+                                if [[ "\$z" == *"infinibox"* ]]; then
+                                        mounts+=(\$(echo "\$z" | awk 'NR=1 {print \$2}'))
+                                fi
+                        done
+
+                        for v in "\${mounts[@]}"; do                                    #//We have our mounts but we need the name for the softlinks
+                                softlinks+=(\$(echo \$v | awk -F'_' '{ print \$3}'))    #//Should get the softlink names
+                        done
+
+#//                     for r in "\${softlinks[@]}"; do                                 #//For testing purposes - can be removed later
+#//                             echo \$r
+#//                     done
+
+
+
+                        for x in "\${mounts[@]}"; do                                    #//Now we want to use our mounts to see if they are being used or not
+                                lsof_check=\$(lsof +f -- \$x >/dev/null 2>&1 | wc -l)   #//If this picks up anything other than 0 - it shouldnt move forward
+                                if [[ \$lsof_check -gt 0 ]] && [[ \$x != *"qemudirs"* ]]; then
+                                        echo "Attention!" \$x "Filesystem is still active! Guests are still running on " $i "! Aborting Host and moving to the next"
+                                        echo "Please shutdown or migrate all guests before running this script on this host again"
+                                        break
+                                else
+                                        if [[ \$x != *"qemudirs"* ]]; then
+                                            umount \$x >/dev/null 2>&1
+                                            check=\$(( \$check +1 ))                    #//Success Check so we can clean up the /etc/fstab file
+                                        fi
+
+                                        for r in "\${softlinks[@]}"; do
+                                                if [[ \$r != *"kvm"* ]] && [[ \$r != *"vol"* ]]; then
+                                                        rm -f /var/lib/libvirt/images/\$r
+                                                else
+                                                        "There is an error in the process" \$r "is not a valid softlink to remove."
+                                                        "Please check the host " $i
+                                                fi
+                                        done
+                                fi
+
+                        done
+                        mnt_fstab=\$(cat /etc/fstab | grep /mnt/vol_kvm_innovative)
+                        if [[ \$check -gt 0 ]] && [[ \$mnt_fstab == *'innovative'* ]]; then
+                                echo "Removing all mount points from fstab if innovative mount exists"
+                                 for o in "\${softlinks[@]}"; do
+                                    echo \$o
+                                    if [[ \$o != *'innovative'* ]]; then
+                                        sed -i "/\$o/d" /tmp/tmpfstab
+                                        cp -f /tmp/tmpfstab /etc/fstab 
+                                    fi
+                                done        
+#                               grep "innovative" /etc/fstab > tmpfile && mv -f tmpfile /etc/fstab
+                        else
+                                echo "/etc/fstab has not been modified as the conditions have not been met"
+                                echo "Either File systems have not been umounted, or innovative is not in the /etc/fstab file"
+                                echo "Please check the Host" $i
+                        fi
+
+EOF
+done
+        fi
+
+elif [[ "$response" == *"setup"* ]]; then
+        echo -e "Proceeding with Host setup"
+        echo -e "Please enter the file location which contains the iii hosts followed by the Datacenter in lower case" 
+        echo -e "For example:  /root/scripts/infile dc01 "
+
+        read file_loc
+        file_array=($file_loc)
+        if [[ ! -s "${file_array}" ]] || [[ "${file_array[1]}" != *"dc"* ]] || [[ ! -f "${file_array[0]}" ]]; then
+                echo "The location you have entered is invalid.  Please try again"
+                echo "The format should be like: /root/scripts/infile dc01"
+                echo ${file_array[0]}
+                echo ${file_array[1]}
+                exit 1
+        else
+                IFS=$'\n' read -d '' -r -a read_array < ${file_array[0]}      #//Turn the file into an array so we can loop through it
+                dc=${file_array[1]}
+
+        fi
+
+        for i in "${read_array[@]}"; do
+                echo $i
+                ssh -t $i -o StrictHostKeyChecking=no <<EOF
+                check2=0
+                echo "Making backup of /etc/fstab (as /etc/bak_fstab)"
+                cp /etc/fstab /etc/bak_fstab
+                mnt_fstab=\$(cat /etc/fstab | grep /mnt/vol_kvm_innovative)
+                mnt=\$(df -h | grep vol_kvm_innovative)
+                iii_dir=\$(ls /mnt | grep innovative)
+                if [[ \$mnt != *'vol_kvm_innovative'* ]] && [[ \$mnt_fstab != *'vol_kvm_innovative'* ]]; then
+                        echo 'infinibox01-vip-v16.$dc.hosted.exlibrisgroup.com:/fs_kvm_innovative    /mnt/vol_kvm_innovative nfs bg,soft,intr,noacl,noatime,nodiratime,nf
+						svers=3,nolock 0 0' >> /etc/fstab
+
+                else
+                        echo "There is an error - this mount is already present on"  $i
+                fi
+
+                if [[ \$iii_dir != *'innovative'* ]] && [[ ! -d "/var/lib/libvirt/images/innovative" ]]; then
+                        TMP=\$(mktemp)
+                        mkdir /mnt/vol_kvm_innovative
+                        mount /mnt/vol_kvm_innovative 2>&1 | tee \$TMP >/dev/null
+                        error_catch=\$(cat \$TMP | grep failed)
+ 
+                else echo "/mnt/vol_kvm_innovative already exists on this host"
+                fi
+
+                if [[ \$error_catch == *'failed'* ]]; then
+                        echo "vol_kvm_innovative failed to mount.  Please check the connection string on " $i "Aborting remainder of script."
+                        echo "Continuing to next Host"
+                        check2=\$(( \$check2 + 1 ))
+                        exit 1
+                fi
+                if [[ ! -f /var/lib/libvirt/images/innovative/innovativePool.xml ]] && [[ \$check2 -eq 0 ]]; then
+                        echo "Pool XML not present.  Creating"
+                        cat <<-EOT >> /var/lib/libvirt/images/innovative/innovativePool.xml
+                        <pool type='dir'>
+                          <name>innovativePool</name>
+                          <source>
+                          </source>
+                          <target>
+                            <path>/var/lib/libvirt/images/innovative</path>
+                            <permissions>
+                              <mode>0700</mode>
+                              <owner>-1</owner>
+                              <group>-1</group>
+                            </permissions>
+                          </target>
+                        </pool>
+                EOT
+                        ln -s /mnt/vol_kvm_innovative/ /var/lib/libvirt/images/innovative
+                        virsh pool-define /var/lib/libvirt/images/alma/innovativePool.xml
+                        virsh pool-autostart innovativePool
+                        virsh pool-start innovativePool
+                else 
+                        echo "Error - either the innovativePool file already exists, or vol_kvm_innovative failed to mount.  Please check the host" $i
+                        echo "Ending the script - continuning to next host"
+                fi
+
+
+EOF
+done
+
+else 
+        echo "Your response is invalid"
+        echo "Your selection is required to be either cleanup or setup"
+        echo "For example: setup"
+        exit 1
+fi
